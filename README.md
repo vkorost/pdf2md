@@ -4,6 +4,12 @@ A Python CLI tool that converts PDFs to Markdown. Automatically routes between f
 
 Works on Windows, macOS, and Linux. Tested on Python 3.11+ / Windows 11.
 
+## Why
+
+LLMs work best with Markdown — it's their native format. If you have years of scanned PDFs piling up (medical records, bills, receipts, legal documents, tax forms), getting them into an LLM project means OCR'ing each one and converting to clean text. Doing that manually for hundreds of files is painful.
+
+pdf2md automates the entire pipeline: point it at a folder, and it batch-converts everything to `.md` files ready to drop into a Claude project or any other LLM context. Scanned pages get OCR'd, text pages get extracted directly, and you get clean Markdown out the other end.
+
 ## Features
 
 - **Automatic routing**: detects whether each page is text or scanned image; uses fast text extraction where possible, OCR only where needed
