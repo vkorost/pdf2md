@@ -1,0 +1,255 @@
+# pdf2md
+
+A Python CLI tool that converts PDFs to Markdown. Automatically routes between fast text extraction and OCR based on whether the PDF has embedded text or is image-only (scanned).
+
+Works on Windows, macOS, and Linux. Tested on Python 3.11+ / Windows 11.
+
+## Features
+
+- **Automatic routing** -- detects whether each page is text or scanned image; uses fast text extraction where possible, OCR only where needed
+- **Batch mode** -- convert an entire folder of PDFs in one command, with optional parallel workers
+- **Language auto-detection** -- detects OCR language from the filename (Cyrillic filenames -> Russian+English, otherwise English); extensible to other languages
+- **Three OCR engines** -- choose between Marker (best quality), ocrmypdf/Tesseract (lightweight), or PaddleOCR
+- **Mixed PDF handling** -- PDFs with both text and scanned pages are handled page-by-page: text pages are extracted directly, image pages are OCR'd, results merged in order
+- **Standalone executable** -- can be built into a single `.exe` with PyInstaller (spec file included)
+
+## Install
+
+```bash
+# Core (text extraction only, no OCR)
+pip install -e .
+
+# With OCR engine of your choice
+pip install -e ".[ocrmypdf]"    # ocrmypdf + Tesseract (lightweight, CPU-only)
+pip install -e ".[marker]"      # Marker (best quality, GPU optional)
+pip install -e ".[paddle]"      # PaddleOCR
+
+# Everything
+pip install -e ".[all]"
+
+# Development (includes pytest)
+pip install -e ".[dev]"
+```
+
+### External dependencies
+
+The `ocrmypdf` engine requires **Tesseract** to be installed separately:
+
+- **Windows**: download from [UB Mannheim](https://github.com/UB-Mannheim/tesseract/wiki). pdf2md auto-detects `C:\Program Files\Tesseract-OCR\`.
+- **Linux**: `sudo apt install tesseract-ocr tesseract-ocr-rus`
+- **macOS**: `brew install tesseract tesseract-lang`
+
+## Quick start
+
+```bash
+# Convert a single file
+pdf2md document.pdf
+
+# Convert all PDFs in the current directory
+pdf2md
+
+# Convert all PDFs in a specific directory
+pdf2md --dir /path/to/pdfs
+
+# Preview what would happen without writing files
+pdf2md --dir /path/to/pdfs --dry-run
+```
+
+Output: `Document.pdf` produces `Document.md` in the same directory. UTF-8, LF line endings.
+
+## CLI reference
+
+```
+pdf2md [file] [options]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `file` | _(none)_ | Single PDF to convert. If omitted, converts all `*.pdf` in the working directory. |
+| `--dir PATH` | _(none)_ | Directory containing PDFs to convert. |
+| `--force` | off | Overwrite existing `.md` files; otherwise skip with a logged note. |
+| `--ocr MODE` | `auto` | `auto` (detect per page), `force` (always OCR), `never` (text extraction only). |
+| `--engine NAME` | `ocrmypdf` | OCR engine: `ocrmypdf`, `marker`, or `paddle`. |
+| `--lang LANG` | `auto` | OCR language codes. `auto` detects from filename (see below). Or specify explicitly, e.g. `rus+eng`, `deu+eng`. |
+| `--workers N` | `1` | Number of parallel workers for batch mode. |
+| `--verbose` | off | Log per-page routing decisions and timing. |
+| `--dry-run` | off | Print planned actions (convert/skip) without writing files. |
+
+Exit codes: `0` success, `1` partial failure (batch with some failures), `2` fatal error.
+
+## Batch mode
+
+Convert every PDF in a folder:
+
+```bash
+pdf2md --dir /path/to/pdfs
+```
+
+- Each `.pdf` produces a `.md` in the same directory
+- Existing `.md` files are **skipped** unless `--force` is used
+- Progress is logged: `[1/10] filename.pdf -> text lang=eng (1.2s)`
+- Use `--workers 4` to process multiple files in parallel
+
+## Language auto-detection
+
+When `--lang` is `auto` (the default), pdf2md inspects the **filename** to choose the OCR language:
+
+| Filename contains | Language code used |
+|---|---|
+| Cyrillic characters (Russian, Ukrainian, etc.) | `rus+eng` |
+| Anything else | `eng` |
+
+You can always override with an explicit `--lang`:
+
+```bash
+pdf2md --lang deu+eng german_document.pdf
+pdf2md --lang fra+eng french_scan.pdf
+```
+
+### Extending language detection
+
+The detection logic lives in `pdf2md/lang_detect.py`. To add your own languages, edit the `detect_lang()` function:
+
+```python
+# pdf2md/lang_detect.py
+import re
+from pathlib import Path
+
+_CYRILLIC_RE = re.compile(r"[\u0400-\u04FF]")
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")       # add your own
+_ARABIC_RE = re.compile(r"[\u0600-\u06FF]")     # add your own
+
+def detect_lang(pdf_path: Path) -> str:
+    name = pdf_path.stem
+    if _CYRILLIC_RE.search(name):
+        return "rus+eng"
+    if _CJK_RE.search(name):
+        return "chi_sim+eng"
+    if _ARABIC_RE.search(name):
+        return "ara+eng"
+    return "eng"
+```
+
+Language codes follow [Tesseract format](https://tesseract-ocr.github.io/tessdoc/Data-Files-in-different-versions.html) when using the `ocrmypdf` engine.
+
+## OCR engines
+
+pdf2md supports three pluggable OCR engines. Install only what you need.
+
+| Engine | Install | Quality | Speed | GPU | Notes |
+|---|---|---|---|---|---|
+| **ocrmypdf** | `pip install pdf2md[ocrmypdf]` + Tesseract binary | Good | Fast | No | Lightweight. Requires Tesseract on PATH. |
+| **Marker** | `pip install pdf2md[marker]` | Best | Slow | Optional | Uses Surya for detection/recognition + layout models. ~2 GB install. Set `TORCH_DEVICE=cpu` for CPU-only. |
+| **PaddleOCR** | `pip install pdf2md[paddle]` | Good | Medium | Optional | First run downloads models to `~/.paddleocr`. |
+
+```bash
+# Use a specific engine
+pdf2md --engine ocrmypdf scanned_doc.pdf
+pdf2md --engine marker   scanned_doc.pdf
+pdf2md --engine paddle   scanned_doc.pdf
+```
+
+If an engine is not installed, you get a clear error message:
+```
+ImportError: Engine 'marker' requires extra dependencies. Install with: pip install pdf2md[marker]
+```
+
+## How routing works
+
+1. Opens the PDF with **PyMuPDF** and counts extractable text characters per page.
+2. Classifies each page:
+   - Page with >= 50 characters of extractable text -> **text page**
+   - Page with < 50 characters -> **image page** (likely scanned)
+3. Applies aggregate rules:
+   - Total chars across all pages < 100 -> route entire PDF to **OCR**
+   - More than 60% image pages -> route to **OCR**
+   - Less than 10% image pages -> route to **text** (skip the few image pages)
+   - Otherwise -> **mixed** (text-extract text pages, OCR image pages, merge in order)
+4. Text pages are extracted using **pymupdf4llm** (preserves headings, lists, tables as Markdown).
+5. Image pages are rendered at 300 DPI and passed to the selected OCR engine.
+
+Use `--verbose` to see per-page classification:
+
+```
+[13:18:25] DEBUG Page 1: 338 chars -> text
+[13:18:25] DEBUG Page 2: 127 chars -> text
+[13:18:25] DEBUG Page 24: 46 chars -> image
+[13:18:25] DEBUG Route decision: text (total_chars=1421304)
+```
+
+## Python packages used
+
+### Core (always installed)
+
+| Package | Purpose |
+|---|---|
+| [PyMuPDF](https://pymupdf.readthedocs.io/) (`pymupdf`) | PDF parsing, page text extraction, image rendering at 300 DPI |
+| [pymupdf4llm](https://github.com/pymupdf/RAG) | Converts PDF pages to Markdown preserving headings, lists, tables |
+
+### OCR engines (optional, install via extras)
+
+| Package | Extra | Purpose |
+|---|---|---|
+| [ocrmypdf](https://ocrmypdf.readthedocs.io/) | `[ocrmypdf]` | Tesseract-based OCR with PDF/A output. Uses sidecar text extraction. |
+| [marker-pdf](https://github.com/VikParuchuri/marker) | `[marker]` | ML-based OCR using Surya models. Best quality for complex layouts. |
+| [paddleocr](https://github.com/PaddlePaddle/PaddleOCR) | `[paddle]` | Baidu's PP-OCRv5 engine. |
+| [paddlepaddle](https://www.paddlepaddle.org.cn/) | `[paddle]` | Deep learning framework required by PaddleOCR. |
+
+### Standard library (no install needed)
+
+`argparse`, `logging`, `pathlib`, `concurrent.futures`, `re`, `tempfile`, `shutil`, `importlib`
+
+## Building a standalone executable
+
+A PyInstaller spec file is included for building a single-file `.exe` (Windows):
+
+```bash
+pip install pyinstaller
+python -m PyInstaller pdf2md.spec --noconfirm
+```
+
+This produces `dist/pdf2md.exe` (~70 MB) with text extraction + ocrmypdf engine bundled. Tesseract still needs to be installed separately on the target machine.
+
+The spec file excludes heavy ML frameworks (torch, scipy, sklearn, etc.) to keep the binary small. If you need the Marker or PaddleOCR engines in the exe, you'll need to adjust the excludes list in `pdf2md.spec`.
+
+## Project structure
+
+```
+pdf2md/
+  __init__.py
+  __main__.py            # entry point: python -m pdf2md
+  cli.py                 # argparse CLI, dispatch, batch processing
+  converter.py           # core routing + conversion logic
+  router.py              # text-vs-image page classification
+  text_extract.py        # pymupdf4llm wrapper with raw fallback
+  lang_detect.py         # filename-based language auto-detection
+  postprocess.py         # whitespace cleanup, blank-line collapse
+  io_utils.py            # path handling, overwrite logic, logging
+  engines/
+    __init__.py          # engine registry with lazy imports
+    base.py              # OcrEngine protocol
+    marker_engine.py     # Marker engine
+    ocrmypdf_engine.py   # ocrmypdf/Tesseract engine
+    paddle_engine.py     # PaddleOCR engine
+tests/
+  conftest.py            # synthetic PDF generators for tests
+  test_router.py         # page classification and routing tests
+  test_text_extract.py   # text extraction tests
+  test_engines.py        # OCR engine tests (skipped if not installed)
+  test_cli.py            # CLI integration tests
+pyproject.toml
+pdf2md.spec              # PyInstaller spec for standalone exe
+```
+
+## Running tests
+
+```bash
+pip install -e ".[dev,ocrmypdf]"
+python -m pytest tests/ -v
+```
+
+Engine tests are automatically **skipped** if the corresponding engine package is not installed.
+
+## License
+
+MIT
