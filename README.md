@@ -6,12 +6,12 @@ Works on Windows, macOS, and Linux. Tested on Python 3.11+ / Windows 11.
 
 ## Features
 
-- **Automatic routing** -- detects whether each page is text or scanned image; uses fast text extraction where possible, OCR only where needed
-- **Batch mode** -- convert an entire folder of PDFs in one command, with optional parallel workers
-- **Language auto-detection** -- detects OCR language from the filename (Cyrillic filenames -> Russian+English, otherwise English); extensible to other languages
-- **Three OCR engines** -- choose between Marker (best quality), ocrmypdf/Tesseract (lightweight), or PaddleOCR
-- **Mixed PDF handling** -- PDFs with both text and scanned pages are handled page-by-page: text pages are extracted directly, image pages are OCR'd, results merged in order
-- **Standalone executable** -- can be built into a single `.exe` with PyInstaller (spec file included)
+- **Automatic routing**: detects whether each page is text or scanned image; uses fast text extraction where possible, OCR only where needed
+- **Batch mode**: convert an entire folder of PDFs in one command, with optional parallel workers
+- **Language auto-detection**: detects OCR language from the filename (Cyrillic filenames -> Russian+English, otherwise English); extensible to other languages
+- **Three OCR engines**: choose between Marker (best quality), ocrmypdf/Tesseract (lightweight), or PaddleOCR
+- **Mixed PDF handling**: PDFs with both text and scanned pages are handled page-by-page: text pages are extracted directly, image pages are OCR'd, results merged in order
+- **Standalone executable**: can be built into a single `.exe` with PyInstaller (spec file included)
 
 ## Install
 
@@ -106,6 +106,8 @@ pdf2md --lang deu+eng german_document.pdf
 pdf2md --lang fra+eng french_scan.pdf
 ```
 
+> **Caveat:** detection is based on the filename, not the document content. A scanned document whose filename does not reflect its language (for example a Russian scan named `report.pdf`) will be misdetected and OCR'd in the wrong language. Pass `--lang` explicitly whenever the filename does not match the content language.
+
 ### Extending language detection
 
 The detection logic lives in `pdf2md/lang_detect.py`. To add your own languages, edit the `detect_lang()` function:
@@ -168,6 +170,8 @@ ImportError: Engine 'marker' requires extra dependencies. Install with: pip inst
 4. Text pages are extracted using **pymupdf4llm** (preserves headings, lists, tables as Markdown).
 5. Image pages are rendered at 300 DPI and passed to the selected OCR engine.
 
+> **Content loss warning:** the "less than 10% image pages" rule skips those image pages entirely; their content does not appear in the output. For a mostly-text PDF that contains a few scanned pages you need captured, run it with `--ocr force` to OCR every page.
+
 Use `--verbose` to see per-page classification:
 
 ```
@@ -184,14 +188,14 @@ Use `--verbose` to see per-page classification:
 | Package | Purpose |
 |---|---|
 | [PyMuPDF](https://pymupdf.readthedocs.io/) (`pymupdf`) | PDF parsing, page text extraction, image rendering at 300 DPI |
-| [pymupdf4llm](https://github.com/pymupdf/RAG) | Converts PDF pages to Markdown preserving headings, lists, tables |
+| [pymupdf4llm](https://github.com/pymupdf/pymupdf4llm) | Converts PDF pages to Markdown preserving headings, lists, tables |
 
 ### OCR engines (optional, install via extras)
 
 | Package | Extra | Purpose |
 |---|---|---|
 | [ocrmypdf](https://ocrmypdf.readthedocs.io/) | `[ocrmypdf]` | Tesseract-based OCR with PDF/A output. Uses sidecar text extraction. |
-| [marker-pdf](https://github.com/VikParuchuri/marker) | `[marker]` | ML-based OCR using Surya models. Best quality for complex layouts. |
+| [marker-pdf](https://github.com/datalab-to/marker) | `[marker]` | ML-based OCR using Surya models. Best quality for complex layouts. |
 | [paddleocr](https://github.com/PaddlePaddle/PaddleOCR) | `[paddle]` | Baidu's PP-OCRv5 engine. |
 | [paddlepaddle](https://www.paddlepaddle.org.cn/) | `[paddle]` | Deep learning framework required by PaddleOCR. |
 
@@ -252,4 +256,16 @@ Engine tests are automatically **skipped** if the corresponding engine package i
 
 ## License
 
-MIT
+AGPL-3.0. This is required by the dependency stack, not a free choice: PyMuPDF and pymupdf4llm are AGPL-3.0, and Marker's code is GPL-3.0. Any distributed work combining them inherits the AGPL terms.
+
+### Dependency licenses
+
+| Package | License |
+|---|---|
+| PyMuPDF, pymupdf4llm | AGPL-3.0 (commercial license available from Artifex) |
+| marker-pdf (code) | GPL-3.0-or-later |
+| marker-pdf (model weights) | Modified AI Pubs OpenRAIL-M: free for research, personal use, and organizations under $2M funding/revenue |
+| ocrmypdf | MPL-2.0 |
+| Tesseract, PaddleOCR, PaddlePaddle | Apache-2.0 |
+
+Organizations above Marker's $2M revenue threshold need a commercial Marker license from Datalab to use the `marker` engine.
