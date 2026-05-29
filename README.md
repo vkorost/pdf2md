@@ -10,6 +10,8 @@ LLMs work best with Markdown — it's their native format. If you have years of 
 
 pdf2md automates the entire pipeline: point it at a folder, and it batch-converts everything to `.md` files ready to drop into a Claude project or any other LLM context. Scanned pages get OCR'd, text pages get extracted directly, and you get clean Markdown out the other end.
 
+This project focuses specifically on PDFs that need OCR — scanned documents, image-only pages, or mixed PDFs. For text-based ebooks (PDF, EPUB, DJVU, FB2) that already have extractable text and don't require OCR, see [ebook2md](https://github.com/vkorost/ebook2md).
+
 ## Features
 
 - **Automatic routing**: detects whether each page is text or scanned image; uses fast text extraction where possible, OCR only where needed
