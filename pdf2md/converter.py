@@ -21,6 +21,7 @@ def convert_pdf(
     ocr_mode: str = "auto",
     engine_name: str = "marker",
     lang: str = "rus+eng",
+    layout: str = "auto",
 ) -> tuple[str, str]:
     """Convert a single PDF to Markdown.
 
@@ -42,7 +43,7 @@ def convert_pdf(
     log.info("%s -> route: %s", pdf_path.name, route)
 
     if route == "text":
-        md = extract_text(pdf_path)
+        md = extract_text(pdf_path, layout=layout)
         method = "text"
     elif route == "ocr":
         engine = get_engine(engine_name)
@@ -50,7 +51,7 @@ def convert_pdf(
         method = f"ocr-{engine_name}"
     else:  # mixed
         engine = get_engine(engine_name)
-        md = _convert_mixed(pdf_path, classifications, engine, lang)
+        md = _convert_mixed(pdf_path, classifications, engine, lang, layout)
         method = f"mixed-{engine_name}"
 
     elapsed = time.perf_counter() - start
@@ -63,6 +64,7 @@ def _convert_mixed(
     classifications: list[tuple[int, str]],
     engine: OcrEngine,
     lang: str,
+    layout: str = "auto",
 ) -> str:
     """Handle mixed PDFs: text-extract text pages, OCR image pages."""
     parts: list[str] = []
@@ -71,7 +73,7 @@ def _convert_mixed(
     for page_idx, kind in classifications:
         if kind == "text":
             try:
-                page_md = extract_text(pdf_path, pages=[page_idx])
+                page_md = extract_text(pdf_path, pages=[page_idx], layout=layout)
                 parts.append(page_md)
             except Exception:
                 log.exception("Text extraction failed on page %d", page_idx + 1)
