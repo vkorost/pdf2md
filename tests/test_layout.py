@@ -125,3 +125,26 @@ def test_prose_pdf_unaffected_by_auto(tmp_path):
     md = extract_text(pdf)
     assert "quick brown fox" in md
     assert md.endswith("\n")
+
+
+def test_char_width_falls_back_when_font_metrics_implausible():
+    """A bad font-derived width must not collapse the grid.
+
+    In frozen (PyInstaller) builds span widths can come back inflated. If we
+    trusted them, every column would compress to a single space and the
+    alignment this module preserves would be lost.
+    """
+    from pdf2md.layout import TARGET_COLUMNS, _median_char_width
+
+    inflated = [[{"bbox": (0, 0, 600, 10), "text": "ab"}]]  # 300pt per char
+    width = _median_char_width(inflated, page_width=612.0)
+    assert width == 612.0 / TARGET_COLUMNS
+
+    sane = [[{"bbox": (0, 0, 60, 10), "text": "abcdefghij"}]]  # 6pt per char
+    assert _median_char_width(sane, page_width=612.0) == 6.0
+
+
+def test_no_page_width_still_yields_usable_width():
+    from pdf2md.layout import DEFAULT_CHAR_WIDTH, _median_char_width
+
+    assert _median_char_width([], page_width=0.0) == DEFAULT_CHAR_WIDTH

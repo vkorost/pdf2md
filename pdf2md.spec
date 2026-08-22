@@ -20,6 +20,7 @@ a = Analysis(
         'pdf2md.converter',
         'pdf2md.router',
         'pdf2md.text_extract',
+        'pdf2md.layout',
         'pdf2md.postprocess',
         'pdf2md.io_utils',
         'pdf2md.lang_detect',

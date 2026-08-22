@@ -44,6 +44,17 @@ MIN_GLUE_LEN = 8
 
 DEFAULT_CHAR_WIDTH = 6.0
 
+# Character columns to spread across a page when deriving the grid from page
+# width. 110 puts a US Letter page at ~5.6pt per character, close to 10pt
+# Courier, which is what these tabular reports typically use.
+TARGET_COLUMNS = 110
+
+# How far the font-derived character width may stray from the page-derived
+# estimate before we distrust it. Font metrics are not always available -- in
+# a PyInstaller build, for instance -- and a bad estimate silently destroys
+# column alignment.
+CHAR_WIDTH_TOLERANCE = (0.4, 2.5)
+
 
 def _page_rows(page: fitz.Page) -> list[list[dict]]:
     """Group a page's non-empty spans into visual rows, left to right."""
@@ -60,8 +71,18 @@ def _page_rows(page: fitz.Page) -> list[list[dict]]:
     return [sorted(bands[k], key=lambda s: s["bbox"][0]) for k in sorted(bands)]
 
 
-def _median_char_width(rows: list[list[dict]]) -> float:
-    """Estimate a representative character width for the page."""
+def _median_char_width(rows: list[list[dict]], page_width: float = 0.0) -> float:
+    """Estimate a representative character width for the page.
+
+    Prefers the median width implied by the page's own spans, but only when
+    that figure is plausible against the page geometry. Font metrics can be
+    unavailable or wrong (notably in frozen/PyInstaller builds), and an
+    inflated estimate collapses every column to a single space, silently
+    discarding the alignment this module exists to preserve.
+    """
+    page_estimate = (
+        page_width / TARGET_COLUMNS if page_width > 0 else DEFAULT_CHAR_WIDTH
+    )
     widths = [
         (s["bbox"][2] - s["bbox"][0]) / len(s["text"])
         for row in rows
@@ -69,9 +90,22 @@ def _median_char_width(rows: list[list[dict]]) -> float:
         if len(s["text"]) > 1 and s["bbox"][2] > s["bbox"][0]
     ]
     if not widths:
-        return DEFAULT_CHAR_WIDTH
+        return max(page_estimate, 1.0)
+
     widths.sort()
-    return max(widths[len(widths) // 2], 1.0)
+    font_estimate = widths[len(widths) // 2]
+
+    low, high = CHAR_WIDTH_TOLERANCE
+    if low * page_estimate <= font_estimate <= high * page_estimate:
+        return max(font_estimate, 1.0)
+
+    log.debug(
+        "Font-derived char width %.2f is implausible against page estimate "
+        "%.2f; using the page estimate.",
+        font_estimate,
+        page_estimate,
+    )
+    return max(page_estimate, 1.0)
 
 
 def row_has_column_gap(row: list[dict]) -> bool:
@@ -97,8 +131,9 @@ def extract_layout_text(pdf_path: Path | str, pages: list[int] | None = None) ->
         indices = range(len(doc)) if pages is None else pages
         page_texts: list[str] = []
         for pno in indices:
-            rows = _page_rows(doc[pno])
-            char_w = _median_char_width(rows)
+            page = doc[pno]
+            rows = _page_rows(page)
+            char_w = _median_char_width(rows, page_width=page.rect.width)
             lines: list[str] = []
             for row in rows:
                 line = ""
