@@ -19,6 +19,7 @@ This project focuses specifically on PDFs that need OCR — scanned documents, i
 - **Language auto-detection**: detects OCR language from the filename (Cyrillic filenames -> Russian+English, otherwise English); extensible to other languages
 - **Three OCR engines**: choose between Marker (best quality), ocrmypdf/Tesseract (lightweight), or PaddleOCR
 - **Mixed PDF handling**: PDFs with both text and scanned pages are handled page-by-page: text pages are extracted directly, image pages are OCR'd, results merged in order
+- **Column-safe tables**: verifies that table cells were not silently concatenated, and re-extracts preserving column layout if they were (see [Column handling](#column-handling))
 - **Standalone executable**: can be built into a single `.exe` with PyInstaller (spec file included)
 
 ## Install
@@ -79,11 +80,55 @@ pdf2md [file] [options]
 | `--ocr MODE` | `auto` | `auto` (detect per page), `force` (always OCR), `never` (text extraction only). |
 | `--engine NAME` | `ocrmypdf` | OCR engine: `ocrmypdf`, `marker`, or `paddle`. |
 | `--lang LANG` | `auto` | OCR language codes. `auto` detects from filename (see below). Or specify explicitly, e.g. `rus+eng`, `deu+eng`. |
+| `--layout MODE` | `auto` | Column handling: `auto` (verify and repair), `preserve` (always preserve layout), `off` (no verification). See below. |
 | `--workers N` | `1` | Number of parallel workers for batch mode. |
 | `--verbose` | off | Log per-page routing decisions and timing. |
 | `--dry-run` | off | Print planned actions (convert/skip) without writing files. |
 
 Exit codes: `0` success, `1` partial failure (batch with some failures), `2` fatal error.
+
+## Column handling
+
+Many PDFs — lab reports, invoices, bank statements — position table columns
+using absolute coordinates rather than whitespace characters. A converter that
+concatenates the text spans of a row without consulting their x-coordinates
+glues the cells together:
+
+```
+CHLORIDE   |   102   |   98-110 mmol/L      (in the PDF)
+CHLORIDE10298-110 mmol/L                    (naive extraction)
+```
+
+The result is not just ugly, it is **ambiguous**: you cannot tell whether the
+value was 102 or 1029. For numeric documents this is silent data corruption,
+which is worse than a hard failure because nothing reports an error.
+
+`--layout auto` (the default) extracts with pymupdf4llm, then checks whether
+any row with a real column gap came out glued. If so, it logs a warning and
+re-extracts using a geometry-aware path that projects each span onto a
+character grid, so column alignment survives:
+
+```
+CHLORIDE                 102              98-110 mmol/L
+CALCIUM                          10.7 H   8.6-10.3 mg/dL
+```
+
+Note that column *position* can itself carry meaning — above, the further-right
+value sits in the report's "Out Of Range" column. Flattening to prose destroys
+that signal; preserving layout keeps it.
+
+| Mode | Behaviour |
+|---|---|
+| `auto` | Verify, and repair only when needed. Keeps pymupdf4llm's prose output for ordinary documents. |
+| `preserve` | Always use the geometry-aware path. Best for known-tabular corpora. |
+| `off` | No verification. Fastest, matches pre-fix behaviour, may glue cells silently. |
+
+### A limitation worth knowing
+
+Some reports encode out-of-range status **only as colour** (a red vs green
+result value) with no `H`/`L` text marker. Any text-only extraction — this tool,
+`pdftotext`, or OCR — loses that flag. If you need abnormal-value status from
+such a report, the colour must be read from the PDF spans directly.
 
 ## Batch mode
 
@@ -233,7 +278,8 @@ pdf2md/
   cli.py                 # argparse CLI, dispatch, batch processing
   converter.py           # core routing + conversion logic
   router.py              # text-vs-image page classification
-  text_extract.py        # pymupdf4llm wrapper with raw fallback
+  text_extract.py        # pymupdf4llm wrapper, column verification, raw fallback
+  layout.py              # column-preserving extraction + collapse detection
   lang_detect.py         # filename-based language auto-detection
   postprocess.py         # whitespace cleanup, blank-line collapse
   io_utils.py            # path handling, overwrite logic, logging
@@ -247,6 +293,7 @@ tests/
   conftest.py            # synthetic PDF generators for tests
   test_router.py         # page classification and routing tests
   test_text_extract.py   # text extraction tests
+  test_layout.py         # column preservation and collapse-detection tests
   test_engines.py        # OCR engine tests (skipped if not installed)
   test_cli.py            # CLI integration tests
 pyproject.toml

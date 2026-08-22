@@ -58,6 +58,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="OCR language codes (Tesseract format). 'auto' detects from filename: Cyrillic -> rus+eng, otherwise eng.",
     )
     p.add_argument(
+        "--layout", choices=["auto", "preserve", "off"], default="auto",
+        help=(
+            "Column handling for text PDFs. auto: verify pymupdf4llm did not "
+            "glue table cells together and re-extract preserving layout if it "
+            "did. preserve: always preserve column layout. off: no verification "
+            "(faster, but table cells may be silently concatenated)."
+        ),
+    )
+    p.add_argument(
         "--workers", type=int, default=1,
         help="Number of parallel workers for batch mode.",
     )
@@ -140,7 +149,8 @@ def _process_parallel(pdfs: list[Path], args, total: int) -> int:
     with ProcessPoolExecutor(max_workers=args.workers) as pool:
         futures = {
             pool.submit(
-                _convert_one_file, pdf, args.ocr, args.engine, args.lang, args.force
+                _convert_one_file, pdf, args.ocr, args.engine, args.lang,
+                args.force, args.layout,
             ): (i, pdf)
             for i, pdf in enumerate(pdfs, 1)
         }
@@ -171,7 +181,7 @@ def _process_one(pdf: Path, args, index: int, total: int) -> int:
     try:
         start = time.perf_counter()
         lang = _resolve_lang(pdf, args.lang)
-        md, method = convert_pdf(pdf, args.ocr, args.engine, lang)
+        md, method = convert_pdf(pdf, args.ocr, args.engine, lang, args.layout)
         elapsed = time.perf_counter() - start
         write_output(out, md)
         log.info("[%d/%d] %s -> %s lang=%s (%.1fs)", index, total, pdf.name, method, lang, elapsed)
@@ -182,14 +192,15 @@ def _process_one(pdf: Path, args, index: int, total: int) -> int:
 
 
 def _convert_one_file(
-    pdf: Path, ocr_mode: str, engine: str, lang: str, force: bool
+    pdf: Path, ocr_mode: str, engine: str, lang: str, force: bool,
+    layout: str = "auto",
 ) -> None:
     """Standalone function for parallel execution."""
     out = resolve_output_path(pdf)
     if should_skip(out, force):
         return
     resolved_lang = _resolve_lang(pdf, lang)
-    md, _ = convert_pdf(pdf, ocr_mode, engine, resolved_lang)
+    md, _ = convert_pdf(pdf, ocr_mode, engine, resolved_lang, layout)
     write_output(out, md)
 
 
