@@ -6,12 +6,24 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 ocrmypdf_datas = collect_data_files('ocrmypdf')
 ocrmypdf_hiddenimports = collect_submodules('ocrmypdf')
 
+# pymupdf4llm picks its extraction engine at import time: if `pymupdf.layout`
+# imports (which needs onnxruntime plus the bundled ONNX layout models), it uses
+# the ML layout engine; otherwise it silently degrades to a heuristic engine that
+# drops every text line whose bbox falls inside an image rect. PDFs that render
+# each paragraph over a full-width raster then come out nearly empty, so these
+# must be bundled even though onnxruntime is large.
+pymupdf_datas = collect_data_files('pymupdf')
+onnxruntime_datas = collect_data_files('onnxruntime')
+layout_hiddenimports = (
+    collect_submodules('pymupdf.layout') + collect_submodules('onnxruntime')
+)
+
 a = Analysis(
     ['pdf2md/__main__.py'],
     pathex=[],
     binaries=[],
-    datas=ocrmypdf_datas,
-    hiddenimports=ocrmypdf_hiddenimports + [
+    datas=ocrmypdf_datas + pymupdf_datas + onnxruntime_datas,
+    hiddenimports=ocrmypdf_hiddenimports + layout_hiddenimports + [
         'pymupdf4llm',
         'pymupdf4llm.helpers',
         'pymupdf4llm.helpers.pymupdf_rag',
@@ -47,7 +59,8 @@ a = Analysis(
         'notebook', 'nbconvert', 'nbformat',
         'pytest', 'py', '_pytest',
         'nltk',
-        'onnxruntime',
+        # NOTE: onnxruntime must NOT be excluded; pymupdf4llm's layout
+        # engine needs it. See the comment at the top of this file.
         'av', 'cv2', 'opencv',
         'sqlalchemy', 'alembic',
         'grpc', 'grpcio',

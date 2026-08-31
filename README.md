@@ -20,6 +20,7 @@ This project focuses specifically on PDFs that need OCR — scanned documents, i
 - **Three OCR engines**: choose between Marker (best quality), ocrmypdf/Tesseract (lightweight), or PaddleOCR
 - **Mixed PDF handling**: PDFs with both text and scanned pages are handled page-by-page: text pages are extracted directly, image pages are OCR'd, results merged in order
 - **Column-safe tables**: verifies that table cells were not silently concatenated, and re-extracts preserving column layout if they were (see [Column handling](#column-handling))
+- **Text-loss guard**: checks that the Markdown kept the text PyMuPDF can see, and re-extracts if the converter dropped most of it (see [Image-backed PDFs](#image-backed-pdfs))
 - **Standalone executable**: can be built into a single `.exe` with PyInstaller (spec file included)
 
 ## Install
@@ -130,6 +131,47 @@ result value) with no `H`/`L` text marker. Any text-only extraction — this too
 `pdftotext`, or OCR — loses that flag. If you need abnormal-value status from
 such a report, the colour must be read from the PDF spans directly.
 
+## Image-backed PDFs
+
+Some PDFs render every paragraph as a full-width raster image with a real text
+layer sitting on top of it. Merged exam dumps, exported slide decks and some
+report generators all do this. `page.get_text()` reads such a page perfectly, so
+routing correctly sends it down the fast text path -- and then the Markdown comes
+out nearly empty.
+
+The cause is that pymupdf4llm picks its extraction engine at import time:
+
+| `pymupdf.layout` imports | Engine | Behaviour |
+|---|---|---|
+| yes (needs `onnxruntime`) | ML layout analysis | Reads text that overlaps images |
+| no | Legacy heuristic | **Skips every text line whose bbox is inside an image rect** |
+
+On the legacy engine a 22-page document can come back with 3% of its text and no
+error: the output is short but not empty, so a plain "did it return anything?"
+check passes.
+
+pdf2md guards against this. Under `--layout auto` (the default) it compares the
+Markdown's character count against the raw PyMuPDF text and, if less than 60%
+survived, re-extracts with image regions ignored, then via the geometry-aware
+layout path, then as raw text. `--layout off` skips the check along with the
+column verification.
+
+Run with `--verbose` to see which engine is active and how much text survived:
+
+```
+DEBUG Text extraction: paper.pdf (pages=None, layout=auto, layout_engine=on)
+DEBUG pymupdf4llm coverage 101% (45976 of 45629 chars)
+```
+
+```
+DEBUG Text extraction: paper.pdf (pages=None, layout=auto, layout_engine=off (onnxruntime missing))
+WARNING paper.pdf: pymupdf4llm recovered only 3% of the page text (1387 of 45629 chars); re-extracting.
+DEBUG pymupdf4llm(ignore_images) coverage 103% (46900 of 45629 chars)
+```
+
+Install `onnxruntime` to get the better engine; the guard is a safety net, not a
+substitute for it.
+
 ## Batch mode
 
 Convert every PDF in a folder:
@@ -221,7 +263,8 @@ ImportError: Engine 'marker' requires extra dependencies. Install with: pip inst
    - Less than 10% image pages -> route to **text** (skip the few image pages)
    - Otherwise -> **mixed** (text-extract text pages, OCR image pages, merge in order)
 4. Text pages are extracted using **pymupdf4llm** (preserves headings, lists, tables as Markdown).
-5. Image pages are rendered at 300 DPI and passed to the selected OCR engine.
+5. The result is verified: collapsed column gaps trigger layout-preserving re-extraction, and a character count below 60% of the raw PyMuPDF text triggers the recovery chain (see [Image-backed PDFs](#image-backed-pdfs)).
+6. Image pages are rendered at 300 DPI and passed to the selected OCR engine.
 
 > **Content loss warning:** the "less than 10% image pages" rule skips those image pages entirely; their content does not appear in the output. For a mostly-text PDF that contains a few scanned pages you need captured, run it with `--ocr force` to OCR every page.
 
@@ -242,6 +285,7 @@ Use `--verbose` to see per-page classification:
 |---|---|
 | [PyMuPDF](https://pymupdf.readthedocs.io/) (`pymupdf`) | PDF parsing, page text extraction, image rendering at 300 DPI |
 | [pymupdf4llm](https://github.com/pymupdf/pymupdf4llm) | Converts PDF pages to Markdown preserving headings, lists, tables |
+| [onnxruntime](https://onnxruntime.ai/) | Runs pymupdf4llm's ML layout models. Without it pymupdf4llm falls back to a heuristic that drops text overlapping images (see [Image-backed PDFs](#image-backed-pdfs)). |
 
 ### OCR engines (optional, install via extras)
 
@@ -265,9 +309,15 @@ pip install pyinstaller
 python -m PyInstaller pdf2md.spec --noconfirm
 ```
 
-This produces `dist/pdf2md.exe` (~70 MB) with text extraction + ocrmypdf engine bundled. Tesseract still needs to be installed separately on the target machine.
+This produces `dist/pdf2md.exe` (~105 MB) with text extraction + ocrmypdf engine bundled. Tesseract still needs to be installed separately on the target machine.
 
 The spec file excludes heavy ML frameworks (torch, scipy, sklearn, etc.) to keep the binary small. If you need the Marker or PaddleOCR engines in the exe, you'll need to adjust the excludes list in `pdf2md.spec`.
+
+`onnxruntime` and `pymupdf/layout/resources/onnx/*.onnx` account for ~35 MB of that and **must not** be excluded: without them the frozen binary silently loses the text of image-backed PDFs (see [Image-backed PDFs](#image-backed-pdfs)). Confirm a build is healthy with:
+
+```bash
+dist/pdf2md.exe some.pdf --force --verbose   # expect: layout_engine=on
+```
 
 ## Project structure
 
